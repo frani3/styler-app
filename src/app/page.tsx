@@ -1,7 +1,8 @@
 ﻿"use client";
 
-import { useState, useMemo } from "react"; // <--- Importamos useMemo
+import { useState, useMemo, useEffect } from "react";
 import { useWeather } from "@/hooks/useWeather";
+import { supabase } from "@/lib/supabase";
 import {
   CloudSun,
   Calendar,
@@ -13,7 +14,8 @@ import {
   Loader2,
   CheckCircle2,
   PenLine,
-  RotateCcw, // Icono para reiniciar
+  RotateCcw,
+  Trash2 // <--- Importado el icono de basura
 } from "lucide-react";
 import UploadModal from "@/components/UploadModal";
 
@@ -23,71 +25,137 @@ interface Suggestion {
   selectedIds: number[];
 }
 
-// Datos de ejemplo iniciales
-const PRENDAS_EJEMPLO = [
-  { id: 1, tipo: "Abrigo Lana", clima: "Frío", img: "https://images.unsplash.com/photo-1544923246-77307dd654cb?w=500&q=80" },
-  { id: 2, tipo: "Jeans Negros", clima: "Templado", img: "https://images.unsplash.com/photo-1541099649105-f69ad21f3246?w=500&q=80" },
-  { id: 3, tipo: "Sneakers Blancos", clima: "Cualquiera", img: "https://images.unsplash.com/photo-1549298916-b41d501d3772?w=500&q=80" },
-  { id: 4, tipo: "Polera Básica", clima: "Caluroso", img: "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=500&q=80" },
-  { id: 5, tipo: "Chaqueta Cuero", clima: "Templado", img: "https://images.unsplash.com/photo-1551028919-ac66e624ecb7?w=500&q=80" },
-];
-
 export default function Home() {
   const [userQuery, setUserQuery] = useState(""); 
   const { weatherText } = useWeather();
   const [isUploadOpen, setUploadOpen] = useState(false);
-  const [prendas, setPrendas] = useState(PRENDAS_EJEMPLO);
+  
+  const [prendas, setPrendas] = useState<any[]>([]); 
   
   const [isGenerating, setIsGenerating] = useState(false);
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
   const [lastUploadMessage, setLastUploadMessage] = useState("Tu closet está listo para nuevas ideas");
 
-  // --- MAGIA: Ordenar prendas para que las elegidas aparezcan PRIMERO ---
+  // 1. CARGAR PRENDAS
+  useEffect(() => {
+    const fetchCloset = async () => {
+      const { data, error } = await supabase
+        .from('closet')
+        .select('*')
+        .order('id', { ascending: false });
+
+      if (error) {
+        console.error("Error cargando closet:", error);
+      } else if (data) {
+        setPrendas(data);
+      }
+    };
+    fetchCloset();
+  }, []);
+
+  // 2. ORDENAR PRENDAS
   const sortedPrendas = useMemo(() => {
     if (!suggestion) return prendas;
     
     return [...prendas].sort((a, b) => {
       const isA = suggestion.selectedIds.includes(a.id);
       const isB = suggestion.selectedIds.includes(b.id);
-      // Si A está seleccionado y B no, A va primero (-1)
       if (isA && !isB) return -1;
       if (!isA && isB) return 1;
       return 0;
     });
   }, [prendas, suggestion]);
 
+  // 3. SUBIR PRENDA
   const handleUpload = async (file: File) => {
     try {
-      setLastUploadMessage("Analizando con Gemini AI...");
+      setLastUploadMessage("Subiendo a la nube...");
+
+      const fileName = `${Date.now()}-${file.name.replace(/\s/g, '_')}`;
+      
+      const { error: uploadError } = await supabase
+        .storage
+        .from('images')
+        .upload(fileName, file);
+
+      if (uploadError) throw uploadError;
+
+      const { data: { publicUrl } } = supabase
+        .storage
+        .from('images')
+        .getPublicUrl(fileName);
+
+      setLastUploadMessage("Analizando estilo con IA...");
       const formData = new FormData();
       formData.append("file", file);
 
       const response = await fetch("/api/analyze", { method: "POST", body: formData });
-      if (!response.ok) throw new Error("Falló el análisis");
-      const data = await response.json();
+      
+      let tipoDetectado = "Prenda";
+      let climaDetectado = "General";
 
-      const nuevaPrenda = {
-        id: Date.now(),
-        tipo: data.tipo || "Prenda",
-        clima: data.clima ? data.clima[0] : "General",
-        img: URL.createObjectURL(file),
-      };
+      if (response.ok) {
+        const geminiData = await response.json();
+        tipoDetectado = geminiData.tipo || "Prenda";
+        climaDetectado = geminiData.clima ? geminiData.clima[0] : "General";
+      }
 
-      setPrendas([nuevaPrenda, ...prendas]);
-      setLastUploadMessage(`¡Listo! Agregado: ${data.tipo}`);
+      const { data: dbData, error: dbError } = await supabase
+        .from('closet')
+        .insert([
+          { 
+            tipo: tipoDetectado, 
+            clima: climaDetectado, 
+            img: publicUrl 
+          }
+        ])
+        .select();
+
+      if (dbError) throw dbError;
+
+      if (dbData) {
+        setPrendas((prev) => [dbData[0], ...prev]);
+      }
+      
+      setLastUploadMessage(`¡Guardado en la nube! Agregado: ${tipoDetectado}`);
       setUploadOpen(false);
+
     } catch (error) {
-      console.error(error);
-      setLastUploadMessage("Error al analizar la imagen.");
+      console.error("Error completo:", error);
+      setLastUploadMessage("Error al guardar en la nube.");
+    }
+  };
+
+  // 4. NUEVA FUNCIÓN: BORRAR PRENDA
+  const borrarPrenda = async (id: number, imgUrl: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Evita que al hacer clic se seleccione la prenda o haga otra cosa
+    
+    if (!confirm("¿Seguro que quieres borrar esta prenda?")) return;
+
+    // Actualización Optimista: Borramos de la pantalla inmediatamente
+    const copiaSeguridad = [...prendas];
+    setPrendas(prendas.filter(p => p.id !== id));
+
+    try {
+      const res = await fetch('/api/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, imgUrl })
+      });
+      
+      if (!res.ok) throw new Error("Error al borrar");
+      
+      // Si todo sale bien, no hacemos nada más.
+
+    } catch (error) {
+      alert("No se pudo borrar la prenda, intenta de nuevo.");
+      setPrendas(copiaSeguridad); // Si falla, devolvemos la prenda a la lista
     }
   };
 
   const generarOutfit = async () => {
     try {
       setIsGenerating(true);
-      // NO borramos la suggestion anterior inmediatamente para evitar parpadeos feos
-      // setSuggestion(null); 
-
       const response = await fetch("/api/suggest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -101,8 +169,6 @@ export default function Home() {
       if (!response.ok) throw new Error("Error generando outfit");
       const data = await response.json();
       setSuggestion(data);
-
-      // Scroll suave hacia abajo para ver las prendas si estás en móvil
       window.scrollTo({ top: 300, behavior: 'smooth' });
 
     } catch (error) {
@@ -211,8 +277,6 @@ export default function Home() {
               </div>
             )}
           </div>
-          
-          {/* Decoración de fondo */}
           <div className="absolute right-0 top-0 w-64 h-64 bg-white/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/4" />
         </section>
 
@@ -226,11 +290,19 @@ export default function Home() {
           />
         </div>
 
-        {/* Grid de Ropa (Ahora usa sortedPrendas) */}
+        {/* Grid de Ropa */}
         <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
           {suggestion ? "Prendas Seleccionadas & Colección" : "Tu Colección Completa"}
           <span className="text-slate-400 text-sm font-normal">({prendas.length})</span>
         </h3>
+
+        {/* MENSAJE SI EL CLOSET ESTÁ VACÍO */}
+        {prendas.length === 0 && (
+          <div className="p-8 text-center bg-white rounded-2xl border border-dashed border-slate-300 mb-8">
+            <p className="text-slate-500 mb-2">Tu armario digital está vacío.</p>
+            <p className="text-sm text-slate-400">¡Sube tu primera prenda para empezar!</p>
+          </div>
+        )}
         
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 lg:gap-6 pb-20">
           {sortedPrendas.map((prenda) => {
@@ -244,6 +316,15 @@ export default function Home() {
                     : "border-slate-100 hover:shadow-md opacity-80 hover:opacity-100"
                 }`}
               >
+                {/* Botón de Borrar (NUEVO) */}
+                <button 
+                  onClick={(e) => borrarPrenda(prenda.id, prenda.img, e)}
+                  className="absolute top-2 left-2 bg-white/90 p-1.5 rounded-full text-red-500 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-50 z-20 shadow-sm"
+                  title="Borrar prenda"
+                >
+                  <Trash2 size={14} />
+                </button>
+
                 {isSelected && (
                   <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-indigo-600 text-white text-xs font-bold px-3 py-1 rounded-full shadow-lg flex items-center gap-1 z-20 animate-in zoom-in spin-in-3">
                     <CheckCircle2 size={12} /> ELEGIDO

@@ -3,93 +3,80 @@ import { NextResponse } from "next/server";
 
 export async function POST(request: Request) {
   const apiKey = process.env.GEMINI_API_KEY;
-
-  if (!apiKey) {
-    return NextResponse.json({ error: "Falta la API Key" }, { status: 500 });
-  }
+  if (!apiKey) return NextResponse.json({ error: "Falta API Key" }, { status: 500 });
 
   const genAI = new GoogleGenerativeAI(apiKey);
   
-  // Usamos el modelo 2.5 Flash que sabemos que tienes
+  // ¡AQUÍ ESTÁ LA SOLUCIÓN!
+  // Usamos el modelo que SI aparece en tu lista: "gemini-2.0-flash"
   const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
   try {
-    const body = await request.json();
-    const { inventory, weather, occasion } = body;
+    const formData = await request.formData();
+    const file = formData.get("file") as File;
 
-    // Validación básica para evitar errores si no hay datos
-    if (!inventory || !weather || !occasion) {
-      // Si falta algo, usamos valores por defecto para no romper la app
-      console.log("Faltan datos, usando valores por defecto para prueba...");
+    if (!file) {
+      return NextResponse.json({ error: "No se recibió imagen" }, { status: 400 });
     }
 
-    const safeInventory = inventory || [];
-    const safeWeather = weather || "Templado";
-    const safeOccasion = occasion || "Casual";
+    console.log(`📸 Analizando con Gemini 2.0 Flash: ${file.name}`);
 
-    // PROMPT DE SISTEMA (Incrustado en el mensaje de usuario)
-    const promptText = `
-      ACTÚA COMO: Un estilista de moda personal experto.
-      OBJETIVO: Seleccionar el mejor conjunto de ropa del inventario proporcionado.
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const base64Image = buffer.toString("base64");
+    
+    // Gemini 2.0 es muy flexible, pero definimos el tipo por si acaso
+    const mimeType = file.type || "image/jpeg";
 
-      CONTEXTO:
-      - Clima actual: ${safeWeather}
-      - Ocasión: ${safeOccasion}
-      - Inventario Disponible (JSON): ${JSON.stringify(safeInventory)}
+    const prompt = `
+      Eres un experto en moda. Analiza esta imagen.
+      
+      Responde ÚNICAMENTE con un objeto JSON válido (sin markdown \`\`\`).
+      
+      Campos requeridos:
+      - "tipo": Nombre específico de la prenda (ej: "Zapatillas Nike Air", "Chaqueta de Cuero Negra").
+      - "clima": Elige uno: "Caluroso", "Templado", "Frío", "Lluvia".
+      - "categoria": Elige uno: "top", "bottom", "shoes", "outerwear", "accessory".
+      - "color": Color principal dominante.
 
-      INSTRUCCIONES:
-      1. Elige una combinación lógica (Top + Bottom + Zapatos).
-      2. IMPORTANTE: No inventes prendas. Usa SOLO los IDs que vienen en el inventario.
-      3. Tu respuesta debe ser EXCLUSIVAMENTE un objeto JSON válido.
-
-      FORMATO DE RESPUESTA JSON:
-      {
-        "selectedIds": [123, 456], 
-        "title": "Título del outfit",
-        "reasoning": "Explicación breve."
-      }
+      Ejemplo: { "tipo": "Jeans Rectos", "clima": "Templado", "categoria": "bottom", "color": "Azul" }
     `;
 
-    // --- AQUÍ ESTÁ EL CAMBIO CLAVE ---
-    // En lugar de pasar el texto directo, construimos la estructura exacta
-    // que pide la API para evitar cualquier ambigüedad de "roles".
-    const result = await model.generateContent({
-      contents: [
-        {
-          role: "user", // Forzamos el rol "user" explícitamente
-          parts: [
-            { text: promptText }
-          ]
-        }
-      ]
-    });
+    const result = await model.generateContent([
+      prompt,
+      {
+        inlineData: {
+          data: base64Image,
+          mimeType: mimeType,
+        },
+      },
+    ]);
 
     const response = await result.response;
-    const text = response.text();
-
-    // Limpieza de Markdown y Parseo
-    const cleanedText = text.replace(/```json|```/g, "").trim();
+    let text = response.text();
     
-    let jsonResponse;
-    try {
-        jsonResponse = JSON.parse(cleanedText);
-    } catch (e) {
-        console.error("Error parseando JSON:", text);
-        // Fallback en caso de que la IA falle al dar formato JSON
-        return NextResponse.json({ 
-            title: "Sugerencia Simple", 
-            reasoning: "Aquí tienes una idea basada en tu ropa.", 
-            selectedIds: safeInventory.length > 0 ? [safeInventory[0].id] : [] 
-        });
+    console.log("🤖 Respuesta:", text.substring(0, 50) + "...");
+
+    // Limpieza de JSON
+    text = text.replace(/```json|```/g, "").trim();
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start !== -1 && end !== -1) {
+      text = text.substring(start, end + 1);
     }
 
-    return NextResponse.json(jsonResponse);
+    const data = JSON.parse(text);
+    return NextResponse.json(data);
 
   } catch (error: any) {
-    console.error("Error CRÍTICO en Suggest:", error);
-    return NextResponse.json(
-      { error: "Error interno", details: error.message }, 
-      { status: 500 }
-    );
+    console.error("❌ ERROR ANALYZE:", error);
+    
+    return NextResponse.json({ 
+      tipo: "Prenda (Error IA)", 
+      clima: "General", 
+      categoria: "other",
+      color: "N/A",
+      debug_error: error.message
+    });
   }
 }
