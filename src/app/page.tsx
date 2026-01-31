@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useState, type ReactNode } from "react";
+import { useState, useMemo } from "react"; // <--- Importamos useMemo
 import { useWeather } from "@/hooks/useWeather";
 import {
   CloudSun,
@@ -12,7 +12,8 @@ import {
   Sparkles,
   Loader2,
   CheckCircle2,
-  PenLine, // Nuevo icono para indicar escritura
+  PenLine,
+  RotateCcw, // Icono para reiniciar
 } from "lucide-react";
 import UploadModal from "@/components/UploadModal";
 
@@ -22,46 +23,38 @@ interface Suggestion {
   selectedIds: number[];
 }
 
+// Datos de ejemplo iniciales
 const PRENDAS_EJEMPLO = [
-  {
-    id: 1,
-    tipo: "Abrigo Lana",
-    clima: "Frío",
-    img: "https://images.unsplash.com/photo-1544923246-77307dd654cb?w=500&q=80",
-  },
-  {
-    id: 2,
-    tipo: "Jeans Negros", // Cambié el nombre para probar tu ejemplo
-    clima: "Templado",
-    img: "https://images.unsplash.com/photo-1541099649105-f69ad21f3246?w=500&q=80",
-  },
-  {
-    id: 3,
-    tipo: "Sneakers Blancos",
-    clima: "Cualquiera",
-    img: "https://images.unsplash.com/photo-1549298916-b41d501d3772?w=500&q=80",
-  },
-  {
-    id: 4,
-    tipo: "Polera Básica",
-    clima: "Caluroso",
-    img: "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=500&q=80",
-  },
+  { id: 1, tipo: "Abrigo Lana", clima: "Frío", img: "https://images.unsplash.com/photo-1544923246-77307dd654cb?w=500&q=80" },
+  { id: 2, tipo: "Jeans Negros", clima: "Templado", img: "https://images.unsplash.com/photo-1541099649105-f69ad21f3246?w=500&q=80" },
+  { id: 3, tipo: "Sneakers Blancos", clima: "Cualquiera", img: "https://images.unsplash.com/photo-1549298916-b41d501d3772?w=500&q=80" },
+  { id: 4, tipo: "Polera Básica", clima: "Caluroso", img: "https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=500&q=80" },
+  { id: 5, tipo: "Chaqueta Cuero", clima: "Templado", img: "https://images.unsplash.com/photo-1551028919-ac66e624ecb7?w=500&q=80" },
 ];
 
 export default function Home() {
-  // Estado para lo que escribe el usuario (ej: "Voy a la U...")
   const [userQuery, setUserQuery] = useState(""); 
-  
   const { weatherText } = useWeather();
   const [isUploadOpen, setUploadOpen] = useState(false);
   const [prendas, setPrendas] = useState(PRENDAS_EJEMPLO);
   
   const [isGenerating, setIsGenerating] = useState(false);
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
-  const [lastUploadMessage, setLastUploadMessage] = useState(
-    "Tu closet está listo para nuevas ideas"
-  );
+  const [lastUploadMessage, setLastUploadMessage] = useState("Tu closet está listo para nuevas ideas");
+
+  // --- MAGIA: Ordenar prendas para que las elegidas aparezcan PRIMERO ---
+  const sortedPrendas = useMemo(() => {
+    if (!suggestion) return prendas;
+    
+    return [...prendas].sort((a, b) => {
+      const isA = suggestion.selectedIds.includes(a.id);
+      const isB = suggestion.selectedIds.includes(b.id);
+      // Si A está seleccionado y B no, A va primero (-1)
+      if (isA && !isB) return -1;
+      if (!isA && isB) return 1;
+      return 0;
+    });
+  }, [prendas, suggestion]);
 
   const handleUpload = async (file: File) => {
     try {
@@ -92,7 +85,8 @@ export default function Home() {
   const generarOutfit = async () => {
     try {
       setIsGenerating(true);
-      setSuggestion(null);
+      // NO borramos la suggestion anterior inmediatamente para evitar parpadeos feos
+      // setSuggestion(null); 
 
       const response = await fetch("/api/suggest", {
         method: "POST",
@@ -100,13 +94,16 @@ export default function Home() {
         body: JSON.stringify({
           inventory: prendas,
           weather: weatherText,
-          occasion: userQuery, // <--- Enviamos lo que escribiste
+          occasion: userQuery,
         }),
       });
 
       if (!response.ok) throw new Error("Error generando outfit");
       const data = await response.json();
       setSuggestion(data);
+
+      // Scroll suave hacia abajo para ver las prendas si estás en móvil
+      window.scrollTo({ top: 300, behavior: 'smooth' });
 
     } catch (error) {
       console.error("Error:", error);
@@ -116,9 +113,14 @@ export default function Home() {
     }
   };
 
+  const resetearBusqueda = () => {
+    setSuggestion(null);
+    setUserQuery("");
+  };
+
   return (
     <div className="flex h-screen bg-slate-50 font-sans text-slate-900">
-      <aside className="w-20 lg:w-64 bg-white border-r border-slate-200 flex flex-col items-center lg:items-start py-8 lg:px-6 fixed lg:relative z-10 h-full">
+      <aside className="w-20 lg:w-64 bg-white border-r border-slate-200 flex flex-col items-center lg:items-start py-8 lg:px-6 fixed lg:relative z-10 h-full hidden md:flex">
         <div className="mb-10 flex items-center gap-3">
           <div className="w-8 h-8 bg-slate-900 rounded-lg flex items-center justify-center text-white font-bold">S</div>
           <span className="text-xl font-bold hidden lg:block tracking-tight">Styler.ai</span>
@@ -133,7 +135,7 @@ export default function Home() {
         </div>
       </aside>
 
-      <main className="flex-1 overflow-y-auto p-4 lg:p-8 lg:pl-80">
+      <main className="flex-1 overflow-y-auto p-4 lg:p-8">
         <header className="flex flex-col gap-3 mb-8">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
@@ -159,8 +161,8 @@ export default function Home() {
           <p className="text-sm text-indigo-600 font-medium h-6">{lastUploadMessage}</p>
         </header>
 
-        {/* --- BANNER DE INTELIGENCIA ARTIFICIAL MEJORADO --- */}
-        <section className={`rounded-3xl p-6 mb-10 border relative overflow-hidden transition-all duration-500 ${suggestion ? "bg-indigo-900 border-indigo-800 text-white" : "bg-gradient-to-r from-indigo-50 to-blue-50 border-indigo-100"}`}>
+        {/* --- BANNER DE INTELIGENCIA ARTIFICIAL --- */}
+        <section className={`rounded-3xl p-6 mb-10 border relative overflow-hidden transition-all duration-500 ${suggestion ? "bg-indigo-900 border-indigo-800 text-white shadow-xl shadow-indigo-200" : "bg-gradient-to-r from-indigo-50 to-blue-50 border-indigo-100"}`}>
           <div className="relative z-10">
             <div className={`flex items-center gap-2 font-semibold mb-2 text-sm uppercase tracking-wider ${suggestion ? "text-indigo-200" : "text-indigo-600"}`}>
               <Sparkles size={16} /> {suggestion ? "Tu Outfit Personalizado" : "Asistente de Estilo"}
@@ -170,9 +172,20 @@ export default function Home() {
               {suggestion ? suggestion.title : "¿Qué tienes en mente hoy?"}
             </h2>
             
-            {/* Si ya hay sugerencia, mostramos el razonamiento. Si no, mostramos el INPUT */}
             {suggestion ? (
-              <p className="text-indigo-100 max-w-md mb-6">{suggestion.reasoning}</p>
+              <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
+                <p className="text-indigo-100 max-w-md mb-6 leading-relaxed">
+                  {suggestion.reasoning}
+                </p>
+                <div className="flex gap-3">
+                  <button 
+                    onClick={resetearBusqueda}
+                    className="bg-white/10 backdrop-blur-md border border-white/20 text-white px-5 py-2.5 rounded-xl font-medium hover:bg-white/20 transition flex items-center gap-2"
+                  >
+                    <RotateCcw size={18} /> Nueva idea
+                  </button>
+                </div>
+              </div>
             ) : (
               <div className="mb-6 max-w-lg">
                 <label className="text-xs font-bold uppercase tracking-wider text-indigo-400 mb-2 block flex items-center gap-2">
@@ -184,26 +197,23 @@ export default function Home() {
                   placeholder="Ej: Voy a la universidad, quiero estar cómoda y usar los pantalones negros..."
                   className="w-full bg-white/50 backdrop-blur-sm border border-indigo-100 rounded-xl p-3 text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none h-24 text-sm shadow-sm"
                 />
+                <button 
+                  onClick={generarOutfit}
+                  disabled={isGenerating || !userQuery.trim()}
+                  className={`mt-4 px-5 py-2.5 rounded-xl font-medium shadow-sm transition flex items-center gap-2 bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-200 ${isGenerating ? "opacity-75 cursor-wait" : ""}`}
+                >
+                  {isGenerating ? (
+                    <> <Loader2 className="animate-spin" size={18} /> Pensando... </>
+                  ) : (
+                    <> <Sparkles size={18} /> Diseñar mi Outfit </>
+                  )}
+                </button>
               </div>
             )}
-
-            <button 
-              onClick={generarOutfit}
-              disabled={isGenerating || (!suggestion && !userQuery.trim())} // Deshabilitado si está vacío
-              className={`px-5 py-2.5 rounded-xl font-medium shadow-sm transition flex items-center gap-2 ${
-                suggestion 
-                  ? "bg-white text-indigo-900 hover:bg-indigo-50" 
-                  : "bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-200"
-              } ${isGenerating ? "opacity-75 cursor-wait" : ""}`}
-            >
-              {isGenerating ? (
-                <> <Loader2 className="animate-spin" size={18} /> Pensando... </>
-              ) : (
-                <> <Sparkles size={18} /> {suggestion ? "Probar otra idea" : "Diseñar mi Outfit"} </>
-              )}
-            </button>
           </div>
-          <div className="absolute right-0 top-0 w-64 h-64 bg-white/40 rounded-full blur-3xl -translate-y-1/2 translate-x-1/4" />
+          
+          {/* Decoración de fondo */}
+          <div className="absolute right-0 top-0 w-64 h-64 bg-white/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/4" />
         </section>
 
         {/* Buscador */}
@@ -216,22 +226,26 @@ export default function Home() {
           />
         </div>
 
-        {/* Grid de Ropa */}
-        <h3 className="font-bold text-lg mb-4">Tu Colección</h3>
+        {/* Grid de Ropa (Ahora usa sortedPrendas) */}
+        <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
+          {suggestion ? "Prendas Seleccionadas & Colección" : "Tu Colección Completa"}
+          <span className="text-slate-400 text-sm font-normal">({prendas.length})</span>
+        </h3>
+        
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 lg:gap-6 pb-20">
-          {prendas.map((prenda) => {
+          {sortedPrendas.map((prenda) => {
             const isSelected = suggestion?.selectedIds.includes(prenda.id);
             return (
               <div
                 key={prenda.id}
-                className={`group bg-white rounded-2xl p-3 border shadow-sm transition-all cursor-pointer relative ${
+                className={`group bg-white rounded-2xl p-3 border shadow-sm transition-all duration-500 relative ${
                   isSelected 
-                    ? "border-indigo-500 ring-4 ring-indigo-500/20 shadow-indigo-200 scale-105 z-10" 
-                    : "border-slate-100 hover:shadow-md"
+                    ? "border-indigo-500 ring-4 ring-indigo-500/20 shadow-indigo-300 scale-[1.02] z-10 order-first" 
+                    : "border-slate-100 hover:shadow-md opacity-80 hover:opacity-100"
                 }`}
               >
                 {isSelected && (
-                  <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-indigo-600 text-white text-xs font-bold px-3 py-1 rounded-full shadow-lg flex items-center gap-1 z-20 animate-in fade-in zoom-in">
+                  <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-indigo-600 text-white text-xs font-bold px-3 py-1 rounded-full shadow-lg flex items-center gap-1 z-20 animate-in zoom-in spin-in-3">
                     <CheckCircle2 size={12} /> ELEGIDO
                   </div>
                 )}
@@ -248,6 +262,7 @@ export default function Home() {
               </div>
             );
           })}
+          
           <button 
             onClick={() => setUploadOpen(true)}
             className="border-2 border-dashed border-slate-200 rounded-2xl flex flex-col items-center justify-center text-slate-400 hover:border-slate-400 hover:text-slate-600 transition aspect-[3/4] bg-slate-50/50"
@@ -262,7 +277,7 @@ export default function Home() {
   );
 }
 
-function SidebarItem({ icon, label, active = false }: { icon: ReactNode; label: string; active?: boolean }) {
+function SidebarItem({ icon, label, active = false }: { icon: any; label: string; active?: boolean }) {
   return (
     <div className={`flex items-center gap-3 px-3 lg:px-4 py-3 rounded-xl cursor-pointer transition-colors ${active ? 'bg-slate-900 text-white shadow-lg shadow-slate-200' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}>
       {icon}
